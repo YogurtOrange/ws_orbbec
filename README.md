@@ -60,10 +60,24 @@ cd ~/ws_orbbec
 
 回车即源码编译；选 `2` 为预览模式，只打印将执行的命令。
 
-**路线 ②**（未克隆本仓库）：
+**路线 ②**（未克隆本仓库）：只下载一个脚本，以下任选其一（不要克隆本仓库）：
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/<你的用户名>/<仓库名>/main/install_official.sh
+# 方式 a：从 Release 下载（推荐，版本固定，与 tag 对应）
+curl -fsSLO https://github.com/YogurtOrange/ws_orbbec/releases/latest/download/install_official.sh
+
+# 方式 b：从 Release 指定版本下载
+curl -fsSLO https://github.com/YogurtOrange/ws_orbbec/releases/download/sdk-v2.10.7/install_official.sh
+
+# 方式 c：从仓库 main 分支直连下载（始终最新）
+curl -fsSLO https://raw.githubusercontent.com/YogurtOrange/ws_orbbec/main/install_official.sh
+```
+
+> 方式 a/b 依赖仓库的 Releases 页面存在对应附件（见下方"发布脚本到 Release"）；方式 c 不依赖 Release，随 main 分支实时更新。
+
+然后在脚本所在目录运行：
+
+```bash
 bash install_official.sh
 ```
 
@@ -77,6 +91,17 @@ ros2 launch orbbec_camera gemini2.launch.py
 安装结束时会询问是否写入 `~/.bashrc`（默认写入，带 `# >>> orbbec_camera` 标记块，重复运行只更新不追加），新开终端自动加载。apt 方式对应 `source /opt/ros/humble/setup.bash`。
 
 启动、话题验证与各机型 launch 文件见 [04 启动与验证](docs/04-启动与验证.md)。
+
+### 发布脚本到 Release（维护者操作）
+
+脚本更新后，把新版 `install_official.sh` 挂到 Release，让路线 ② 的方式 a/b 始终可用：
+
+1. 打开仓库 [Releases](https://github.com/YogurtOrange/ws_orbbec/releases) → "Draft a new release"
+2. 选择已有 tag（如 `sdk-v2.10.7`）或新建 tag
+3. 填写标题与说明（注明适配的 `OrbbecSDK_ROS2` 版本）
+4. 在 "Attach binaries" 处拖入 `install_official.sh`，点击 "Publish release"
+
+发布后 `releases/latest/download/install_official.sh` 会自动指向最新一次发布的附件。
 
 ---
 
