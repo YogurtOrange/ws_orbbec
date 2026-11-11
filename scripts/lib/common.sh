@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Orbbec ROS2 安装教程公共库：日志/进度条/横幅、环境探测、依赖清单、机型映射、~/.bashrc 写入。
+# Orbbec ROS2 安装教程公共库：日志/进度条/横幅、环境与硬件探测（架构/内存/核数）、
+# 编译并发推荐与交互选择、依赖清单、机型映射、~/.bashrc 写入。
 # 用法：source "$SCRIPT_DIR/lib/common.sh"
 
 if [[ -n "${ORBBEC_COMMON_LOADED:-}" ]]; then
@@ -77,6 +78,71 @@ detect_arch() {
     aarch64|arm64) echo "arm64" ;;
     *) echo "unknown" ;;
   esac
+}
+
+# ---------- 编译并发（按内存/核数自适应，低内存 ARM 板防卡死） ----------
+# 总内存（MB）
+detect_mem_mb() {
+  local m
+  m="$(awk '/^MemTotal:/{printf "%d", $2 / 1024}' /proc/meminfo 2>/dev/null)"
+  if [[ "$m" =~ ^[0-9]+$ ]]; then echo "$m"; else echo 0; fi
+}
+
+# 逻辑核数
+detect_cores() {
+  local c
+  c="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+  [[ "$c" =~ ^[0-9]+$ ]] && (( c > 0 )) && echo "$c" || echo 1
+}
+
+# 单个编译任务预估占用内存（MB）：orbbec_camera 中重文件编译峰值约 1~1.5GB
+ORBBEC_MEM_PER_JOB=1536
+
+# 推荐并行任务数：同时受内存与核数限制，至少 1
+# 例：4GB/4核 ARM 板 -> 2；2GB -> 1；8GB 以上 -> 由核数决定
+suggest_jobs() {
+  local cores mem jobs
+  cores="$(detect_cores)"
+  mem="$(detect_mem_mb)"
+  jobs="$cores"
+  if (( mem > 0 )); then
+    local by_mem=$(( mem / ORBBEC_MEM_PER_JOB ))
+    (( by_mem < jobs )) && jobs="$by_mem"
+  fi
+  (( jobs < 1 )) && jobs=1
+  echo "$jobs"
+}
+
+# 交互式选择并行任务数：$1 = 推荐值，输出最终并行数（空串 = 不限制）
+# 提示信息走 stderr，结果走 stdout，便于 $(ask_jobs ...) 取值
+ask_jobs() {
+  local rec="$1" choice n
+  printf '\n%s请选择并行编译任务数%s\n' "$C_BOLD$C_BLUE" "$C_OFF" >&2
+  printf '  %s1)%s 推荐 %s 个（按内存自动收敛，适合低内存 ARM 板）\n' \
+    "$C_GREEN" "$C_OFF" "$rec" >&2
+  printf '  %s2)%s 手动指定\n' "$C_BLUE" "$C_OFF" >&2
+  printf '  %s3)%s 不限制（交给 colcon，按 CPU 核数）\n' "$C_YELLOW" "$C_OFF" >&2
+  while true; do
+    read -r -p "请输入 [1/2/3]（默认 1）：" choice || choice=""
+    case "${choice:-1}" in
+      1) echo "$rec"; return ;;
+      3) echo ""; return ;;
+      2)
+        read -r -p "请输入并行任务数（正整数）：" n || n=""
+        if [[ "$n" =~ ^[1-9][0-9]*$ ]]; then echo "$n"; return; fi
+        warn "无效输入：${n:-空}"
+        ;;
+      *) warn "无效输入：$choice" ;;
+    esac
+  done
+}
+
+# 打印硬件与推荐并行数，便于低配板用户判断
+log_build_hardware() {
+  log "编译硬件：$(detect_arch) / $(detect_cores) 核 / $(detect_mem_mb) MB 内存 → 推荐并行 $(suggest_jobs)"
+  if (( $(detect_mem_mb) > 0 && $(detect_mem_mb) < 2048 )); then
+    warn "物理内存不足 2GB，编译可能因耗尽内存被系统终止，建议先增加 swap 并只使用 1 个并行任务"
+  fi
 }
 
 detect_ros_distro() {

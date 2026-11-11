@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 编译工作空间：colcon build（Release）。
+# 编译工作空间：colcon build（Release + symlink），交互选择并行任务数。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -8,13 +8,17 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 WS="${ORBBEC_WS:-$(default_ws)}"
 ROS_ARG="${ORBBEC_ROS_ARG:-}"
-JOBS="${ORBBEC_JOBS:-}"
 DRY_RUN="${ORBBEC_DRY_RUN:-0}"
 export DRY_RUN
 
-if ! is_orchestrated && [[ -t 0 && "$DRY_RUN" != "1" && -z "$JOBS" ]]; then
-  read -r -p "并行编译任务数（直接回车 = colcon 自动）：" _jobs || _jobs=""
-  JOBS="$_jobs"
+# 并行数：默认推荐值按内存与核数收敛（ARM 低内存板防卡死/OOM），
+# 有终端时用菜单选择；预览/非交互模式直接用推荐值。
+RECOMMEND="$(suggest_jobs)"
+log_build_hardware
+if [[ "$DRY_RUN" != "1" && -t 0 && "${ORBBEC_ASSUME_YES:-0}" != "1" ]]; then
+  JOBS="$(ask_jobs "$RECOMMEND")"
+else
+  JOBS="$RECOMMEND"
 fi
 
 if [[ "$DRY_RUN" == "1" ]]; then
@@ -31,7 +35,18 @@ DISTRO="${ROS_ARG:-$(detect_ros_distro)}"
 ros_source "$(ros_setup_file "$DISTRO")"
 
 ARGS=(build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release)
-[[ -n "$JOBS" ]] && ARGS+=(--parallel-workers "$JOBS")
+if [[ -n "$JOBS" ]]; then
+  ARGS+=(--parallel-workers "$JOBS")
+  # 同时限制包级并发（--parallel-workers）与单个包内 make/ninja 的并发，
+  # 否则单包编译仍会按全部核数拉起进程，低内存板容易卡死。
+  export MAKEFLAGS="-j${JOBS}"
+  export CMAKE_BUILD_PARALLEL_LEVEL="$JOBS"
+  log "并行编译：$JOBS 个任务"
+  [[ "$DRY_RUN" == "1" ]] \
+    && log "预览：将额外设置 MAKEFLAGS=-j$JOBS CMAKE_BUILD_PARALLEL_LEVEL=$JOBS"
+else
+  warn "并行编译：colcon 自动（按 CPU 核数），低内存板建议重新运行并手动指定较小值"
+fi
 
 log "开始编译：$WS（ROS 2 $DISTRO）"
 cd "$WS"

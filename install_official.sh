@@ -6,7 +6,8 @@
 # 注意：已克隆本仓库的用户不要用本脚本，请用仓库内 ./scripts/install.sh；
 #       若在本仓库目录内运行，脚本会检测到并直接退出。
 # 两种安装方式：
-#   1) 源码编译：克隆官方 tag（默认 v2.10.7，可选自动获取最新 tag）后 colcon build，可改代码
+#   1) 源码编译：克隆官方 tag（默认 v2.10.7，可选自动获取最新 tag）后 colcon build，
+#      并行任务数交互选择（默认按内存/核数推荐），可改代码
 #   2) apt 二进制：安装官方 deb（2.9.3），速度最快，不可改代码
 # 结束时可选择写入 ~/.bashrc，新开终端自动加载，免去每次手动 source。
 #
@@ -90,6 +91,60 @@ detect_ros_distro() {
   echo ""
 }
 
+# ---------- 编译并发（按内存/核数自适应，低内存 ARM 板防卡死） ----------
+detect_mem_mb() {
+  local m
+  m="$(awk '/^MemTotal:/{printf "%d", $2 / 1024}' /proc/meminfo 2>/dev/null)"
+  if [[ "$m" =~ ^[0-9]+$ ]]; then echo "$m"; else echo 0; fi
+}
+
+detect_cores() {
+  local c
+  c="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+  [[ "$c" =~ ^[0-9]+$ ]] && (( c > 0 )) && echo "$c" || echo 1
+}
+
+# 单个编译任务预留内存（MB）
+MEM_PER_JOB=1536
+
+# 推荐并行任务数：内存与核数取小，至少 1
+suggest_jobs() {
+  local cores mem jobs
+  cores="$(detect_cores)"
+  mem="$(detect_mem_mb)"
+  jobs="$cores"
+  if (( mem > 0 )); then
+    local by_mem=$(( mem / MEM_PER_JOB ))
+    (( by_mem < jobs )) && jobs="$by_mem"
+  fi
+  (( jobs < 1 )) && jobs=1
+  echo "$jobs"
+}
+
+# 交互式选择并行任务数：$1 = 推荐值，输出最终并行数（空串 = 不限制）
+# 提示走 stderr，结果走 stdout，便于 $(ask_jobs ...) 取值
+ask_jobs() {
+  local rec="$1" choice n
+  printf '\n%s请选择并行编译任务数%s\n' "$C_BOLD$C_CYAN" "$C_OFF" >&2
+  printf '  %s1)%s 推荐 %s 个（按内存自动收敛，适合低内存 ARM 板）\n' \
+    "$C_GREEN" "$C_OFF" "$rec" >&2
+  printf '  %s2)%s 手动指定\n' "$C_CYAN" "$C_OFF" >&2
+  printf '  %s3)%s 不限制（交给 colcon，按 CPU 核数）\n' "$C_YELLOW" "$C_OFF" >&2
+  while true; do
+    read -r -p "请输入 [1/2/3]（默认 1）：" choice || choice=""
+    case "${choice:-1}" in
+      1) echo "$rec"; return ;;
+      3) echo ""; return ;;
+      2)
+        read -r -p "请输入并行任务数（正整数）：" n || n=""
+        if [[ "$n" =~ ^[1-9][0-9]*$ ]]; then echo "$n"; return; fi
+        warn "无效输入：${n:-空}"
+        ;;
+      *) warn "无效输入：$choice" ;;
+    esac
+  done
+}
+
 ros_source() {
   set +u
   # shellcheck disable=SC1090
@@ -165,7 +220,7 @@ if [[ -t 0 && "$ASSUME_YES" != "1" ]]; then INTERACTIVE=1; fi
 if [[ -z "$MODE" ]]; then
   if [[ "$INTERACTIVE" == "1" ]]; then
     printf '\n%s两种安装方式的区别：%s\n' "$C_BOLD" "$C_OFF"
-    printf '  %s源码编译%s：官方最新 v2.10.7，可改代码/launch；需克隆并编译（约 2-3 分钟）\n' "$C_GREEN" "$C_OFF"
+    printf '  %s源码编译%s：官方 v2.10.7（默认固定版本），可改代码/launch；需克隆并编译（约 2-3 分钟）\n' "$C_GREEN" "$C_OFF"
     printf '            安装到 ~/ws_orbbec/install，可随时调整参数\n'
     printf '  %sapt 二进制%s：官方源 2.9.3（比源码版旧），装完即用（约 30 秒）\n' "$C_YELLOW" "$C_OFF"
     printf '            安装到 /opt/ros/humble 系统目录，不能修改代码\n'
@@ -351,17 +406,44 @@ else
   # ---------- 4. 编译 ----------
   step_header 4 "$TOTAL" "编译工作空间"
   ros_source "/opt/ros/$DISTRO/setup.bash"
+
+  # 低内存板（常见于 ARM）推荐值按内存收敛；有终端时用菜单选择，避免编译卡顿/OOM
+  RECOMMEND="$(suggest_jobs)"
+  log "编译硬件：$ARCH / $(detect_cores) 核 / $(detect_mem_mb) MB 内存 → 推荐并行 $RECOMMEND"
+  if (( $(detect_mem_mb) > 0 && $(detect_mem_mb) < 2048 )); then
+    warn "物理内存不足 2GB，建议先增加 swap 并使用 1 个并行任务，否则可能卡死"
+  fi
+  if [[ "$INTERACTIVE" == "1" && "$DRY_RUN" != "1" ]]; then
+    JOBS="$(ask_jobs "$RECOMMEND")"
+  else
+    JOBS="$RECOMMEND"
+  fi
+
+  BUILD_ARGS=(--symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release)
+  if [[ -n "$JOBS" ]]; then
+    BUILD_ARGS+=(--parallel-workers "$JOBS")
+    # 同时限制包级并发与包内 make/ninja 的并发，否则单包仍会按全部核数起进程
+    export MAKEFLAGS="-j${JOBS}"
+    export CMAKE_BUILD_PARALLEL_LEVEL="$JOBS"
+    log "并行编译：$JOBS 个任务"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      log "预览：将额外设置 MAKEFLAGS=-j$JOBS CMAKE_BUILD_PARALLEL_LEVEL=$JOBS"
+    fi
+  else
+    warn "并行编译：colcon 自动（按 CPU 核数），低内存板建议手动指定较小值"
+  fi
+
   if [[ "$DRY_RUN" == "1" ]]; then
-    run colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+    run colcon build "${BUILD_ARGS[@]}"
     log "预览：以上编译命令未执行"
   else
-    ( cd "$WS" && colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release )
+    ( cd "$WS" && colcon build "${BUILD_ARGS[@]}" )
     ok "编译完成：$WS/install"
   fi
   SRC_RULE="$WS/install/orbbec_camera/share/orbbec_camera/udev/99-obsensor-libusb.rules"
 fi
 
-# ---------- 5. udev ----------
+# ---------- udev（源码模式第 5/6 步；二进制模式第 3/4 步） ----------
 step_header "$STEP_UDEV" "$TOTAL" "安装 udev 规则"
 TARGET=/etc/udev/rules.d/99-obsensor-libusb.rules
 if [[ ! -f "$SRC_RULE" ]]; then
@@ -386,7 +468,7 @@ if [[ -f "$SRC_RULE" ]]; then
   fi
 fi
 
-# ---------- 6. 验证 ----------
+# ---------- 验证（源码模式第 6/6 步；二进制模式第 4/4 步） ----------
 step_header "$STEP_VERIFY" "$TOTAL" "验证"
 if [[ "$DRY_RUN" == "1" ]]; then
   ok "预览模式：跳过真实验证"
@@ -448,3 +530,10 @@ else
   log "启动相机：ros2 launch orbbec_camera gemini2.launch.py"
   log "查看图像：rqt_image_view  或  rviz2"
 fi
+
+# ---------- 致谢 ----------
+banner "致谢"
+log "感谢使用本仓库的一键安装脚本"
+log "仓库地址：https://github.com/YogurtOrange/ws_orbbec"
+log "如果对你有帮助，欢迎 Star、提 Issue 或提交 PR"
+log "详细文档：https://github.com/YogurtOrange/ws_orbbec/tree/main/docs"
