@@ -1,0 +1,21 @@
+cmake_minimum_required(VERSION 3.8)
+project(orbbec_quickstart_cpp CXX)
+
+if(NOT CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 17)
+endif()
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(cv_bridge REQUIRED)
+find_package(OpenCV REQUIRED)
+
+add_executable(subscribe_display subscribe_display.cpp)
+ament_target_dependencies(subscribe_display rclcpp sensor_msgs cv_bridge)
+target_include_directories(subscribe_display PRIVATE ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(subscribe_display ${OpenCV_LIBS})

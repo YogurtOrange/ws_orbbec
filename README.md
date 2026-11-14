@@ -93,6 +93,8 @@ ros2 launch orbbec_camera gemini2.launch.py
 
 启动、话题验证与各机型 launch 文件见 [04 启动与验证](docs/04-启动与验证.md)。
 
+想看彩色与深度画面：启动相机后运行 `~/ws_orbbec/examples/quickstart/python/run.sh`（C++ 版见 `cpp/`），详见 [06 快速上手](docs/06-快速上手-订阅与显示.md)。
+
 ### 发布脚本到 Release（维护者操作）
 
 脚本更新后，把新版 `install_official.sh` 挂到 Release，让路线 ② 的方式 a/b 始终可用：
@@ -115,6 +117,7 @@ ros2 launch orbbec_camera gemini2.launch.py
 | [03 单文件脚本：官方方式](docs/03-方式B-官方方式.md) | 单文件脚本两选项的区别、官方手动步骤、版本策略 |
 | [04 启动与验证](docs/04-启动与验证.md) | 加载环境、枚举设备、机型 launch 映射、apt 差异 |
 | [05 常见问题](docs/05-常见问题.md) | 权限、设备未枚举、编译报错、混装排查 |
+| [06 快速上手：订阅与显示](docs/06-快速上手-订阅与显示.md) | Python 示例：话题转 BGR 图像，RGB 与伪彩深度双窗口 |
 
 ---
 
@@ -124,7 +127,16 @@ ros2 launch orbbec_camera gemini2.launch.py
 ws_orbbec/
 ├── README.md                  # 本文件：概览与路线选择
 ├── install_official.sh        # 单文件入口（未克隆仓库者使用）
-├── docs/                      # 分步教程（01 ~ 05）
+├── docs/                      # 分步教程（01 ~ 06）
+├── examples/
+│   └── quickstart/            # 入门示例：订阅话题并显示 RGB / 深度
+│       ├── python/            # Python 版
+│       │   ├── run.sh
+│       │   └── subscribe_display.py
+│       └── cpp/               # C++ 版（CMake 直接编译，不走 colcon）
+│           ├── build.sh
+│           ├── run.sh
+│           └── subscribe_display.cpp
 ├── scripts/
 │   ├── install.sh             # 仓库入口：源码编译 / 预览
 │   ├── check_env.sh           # 环境自检（系统/ROS/架构/工具链/USB）
